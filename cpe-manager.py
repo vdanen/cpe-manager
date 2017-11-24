@@ -19,6 +19,7 @@ import requests
 import sys
 from collections import namedtuple
 from cpe import CPE
+from cpe.cpe2_2 import CPE2_2
 
 try:
     import xml.etree.cElementTree as ET
@@ -75,23 +76,33 @@ def parse_cpedictionary(cpedict_file=None):
     return cpedict
 
 
-def validate(the_cpe):
+def validate(the_cpe, mode):
     """Try to validate the CPE"""
-    try:
-        c22 = CPE(the_cpe)
-    except NotImplementedError:
-        return('Invalid CPE: %s!' % the_cpe)
-    except ValueError as e:
-        return('Invalid CPE: %s (%s)' % (the_cpe, e))
+    if mode == '2.2':
+        try:
+            c22 = CPE2_2(the_cpe)
+        except NotImplementedError:
+            return('Invalid CPE: %s!' % the_cpe)
+        except ValueError as e:
+            return('Invalid CPE: %s (%s)' % (the_cpe, e))
 
-    return c22
+        return c22
+    elif mode == '2.3':
+        try:
+            c23 = CPE(the_cpe)
+        except NotImplementedError:
+            return('Invalid CPE: %s!' % the_cpe)
+        except ValueError as e:
+            return('Invalid CPE: %s (%s)' % (the_cpe, e))
+
+        return c23
 
 
-def get_cpe(the_cpe, rhmode=True):
+def get_cpe(the_cpe, mode, rhmode=True):
     """Turn a CPE string into a named object as a convenience"""
-    myCPE = namedtuple('myCPE', 'part vendor product version update edition language sw_edition target_sw target_hw other cpe')
+    myCPE = namedtuple('myCPE', 'part vendor product version update edition language sw_edition target_sw target_hw other cpe23 cpe')
 
-    tcpe = validate(the_cpe)
+    tcpe = validate(the_cpe, mode)
     if type(tcpe) == type('str'):
         # send the error string back to where it's useful
         return tcpe
@@ -99,6 +110,12 @@ def get_cpe(the_cpe, rhmode=True):
     if rhmode:
         if tcpe.get_vendor()[0].strip('"') != 'redhat':
             return('Validation failed (not a Red Hat CPE!): %s' % the_cpe)
+
+    if mode == '2.2':
+        # we want the formatted type to be a 2.3-formatted CPE
+        cpe23 = validate(the_cpe, '2.3')
+    else:
+        cpe23 = tcpe
 
     parts = myCPE(part       = tcpe.get_part()[0].strip('"'),
                   vendor     = tcpe.get_vendor()[0].strip('"'),
@@ -111,14 +128,15 @@ def get_cpe(the_cpe, rhmode=True):
                   target_sw  = tcpe.get_target_software()[0].strip('"'),
                   target_hw  = tcpe.get_target_hardware()[0].strip('"'),
                   other      = tcpe.get_other()[0].strip('"'),
+                  cpe23      = cpe23,
                   cpe        = tcpe)
 
     return parts
 
 
-def describe_cpe(cpe_string, rhmode=True):
+def describe_cpe(cpe_string, mode, rhmode=True):
     """Describe the parts of the provided CPE"""
-    the_cpe = get_cpe(cpe_string, rhmode)
+    the_cpe = get_cpe(cpe_string, mode, rhmode)
     if type(the_cpe) == type('str'):
         print('Validation failed: %s' % the_cpe)
         sys.exit(1)
@@ -143,15 +161,16 @@ def describe_cpe(cpe_string, rhmode=True):
       or 'ga' in the case of RHEL 7 GA).  If there is no commonly used term for the initial release, then '-' should be
       used for that CPE (e.g. "Foo 1" would be "foo:1:-:" unless it was referred to as "Foo 1.0" in which case "foo:1:0:"
       may be more appropriate)
-    Edition is used for the the edition of this platform, e.g. "workstation" or "server" or "professional", etc.
-      NOTE: This is available for legacy CPE 2.2 compatability but is considered deprecated in 2.3
+    Edition is used for the edition of this platform, e.g. "workstation" or "server" or "professional", etc.""")
+    if mode == '2.3':
+        print("""      NOTE: This is available for legacy CPE 2.2 compatability but is considered deprecated in 2.3
     Language is used for the language used for this product (e.g. "zh-tw" for traditional Chinese)
     Software Edition is used to characterise how the product is tailored for a particular maket or class of end users
     Target Software is used to indicate the software environment within which the product operates
     Target Hardware is used to indicate the architecture on whioch the product operates (e.g. "x86" or "x86_64")
     Other is used to capture any other general descriptive or identifying infomration which is vendor- or
       product-specific
-        """)
+            """)
 
     print('Given the CPE string "%s":\n' % cpe_string)
     print('              Part: %s [%s]' % (the_cpe.part, part_map[the_cpe.part]))
@@ -160,11 +179,12 @@ def describe_cpe(cpe_string, rhmode=True):
     print('           Version: %s' % the_cpe.version)
     print('            Update: %s' % the_cpe.update)
     print('           Edition: %s' % the_cpe.edition)
-    print('          Language: %s' % the_cpe.language)
-    print('  Software Edition: %s' % the_cpe.sw_edition)
-    print('   Target Software: %s' % the_cpe.target_sw)
-    print('   Target Hardware: %s' % the_cpe.target_hw)
-    print('             Other: %s' % the_cpe.other)
+    if mode == '2.3':
+        print('          Language: %s' % the_cpe.language)
+        print('  Software Edition: %s' % the_cpe.sw_edition)
+        print('   Target Software: %s' % the_cpe.target_sw)
+        print('   Target Hardware: %s' % the_cpe.target_hw)
+        print('             Other: %s' % the_cpe.other)
 
 
 if __name__ == '__main__':
@@ -178,6 +198,7 @@ if __name__ == '__main__':
     parser.add_argument('-w', '--wfn', dest='wfn', action='store_true', help="Returns the CPE name as a WFN string")
     parser.add_argument('-u', '--uri', dest='uri', action='store_true', help="Returns the CPE name as a URI string")
     parser.add_argument('-f', '--fs', dest='fs', action='store_true', help="Returns the CPE name as an FS string")
+    parser.add_argument('-m', '--mode', dest='mode', metavar='MODE', default='2.2',  help="Either 2.2 or 2.3; which CPE version to validate; defaults to 2.2")
     parser.add_argument('--disable-redhat', dest='disable_redhat', action='store_true', help="Disable Red Hat-specific checks")
     args = parser.parse_args()
 
@@ -197,19 +218,23 @@ if __name__ == '__main__':
         print('Must a provide a CPE to display URI of!')
         sys.exit(1)
 
+    if args.mode not in ['2.2', '2.3']:
+        print('Invalid mode: %s; must be 2.2 or 2.3' % args.mode)
+        sys.exit(1)
+
     if args.describe and args.mycpe:
-        describe_cpe(args.mycpe, rhmode)
+        describe_cpe(args.mycpe, args.mode, rhmode)
 
     if (args.wfn or args.uri or args.fs) and args.mycpe:
-        x = get_cpe(args.mycpe, rhmode)
+        x = get_cpe(args.mycpe, args.mode, rhmode)
         if type(x) == type('str'):
             print('Validation failed for %s: %s' % (args.mycpe, x))
         if args.wfn:
             print('               WFN: %s' % x.cpe.as_wfn())
         if args.uri:
-            print('               URI: %s' % x.cpe.as_uri_2_3())
+            print('         URI (2.2): %s' % x.cpe23.as_uri_2_3())
         if args.fs:
-            print('         Formatted: %s' % x.cpe.as_fs())
+            print('   Formatted (2.3): %s' % x.cpe23.as_fs())
 
     if args.mycpe:
         sys.exit(0)
@@ -226,7 +251,7 @@ if __name__ == '__main__':
         for cpe_string in cpes:
             cpe_name = cpes[cpe_string]
 
-            x = get_cpe(cpe_string, rhmode)
+            x = get_cpe(cpe_string, args.mode, rhmode)
             if type(x) == type('str'):
                 print('Validation failed for %s: %s' % (cpe_name, x))
                 fail = fail + 1
